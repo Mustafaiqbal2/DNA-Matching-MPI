@@ -306,7 +306,6 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
     size_t remainder = totalPairs % numProcs;
     
     // Calculate start and end pair indices for this process
-    // Fix signedness comparison warnings by casting rank to size_t
     size_t startPair = static_cast<size_t>(rank) * pairsPerProcess + 
                       (static_cast<size_t>(rank) < remainder ? rank : remainder);
     
@@ -338,9 +337,11 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
     auto endTime = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsedTime = endTime - startTime;
     
-    // Printing timing information from each process
-    std::cout << "Process " << rank << " computed " << (endPair - startPair) 
-              << " pairs in " << elapsedTime.count() << " seconds" << std::endl;
+    // Only rank 0 prints timing information
+    if (rank == 0) {
+        std::cout << "Process " << rank << " computed " << (endPair - startPair) 
+                  << " pairs in " << elapsedTime.count() << " seconds" << std::endl;
+    }
     
     // Gather all parts of the distance matrix to rank 0
     for (size_t i = 0; i < n; i++) {
@@ -367,7 +368,48 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
         GuideTree tree;
         tree.buildUPGMA(distMatrix);
         std::cout << "Guide tree (Newick format): " << tree.getNewickFormat() << std::endl;
+        
+        // Print all sequences at the end
+        std::cout << "\nInput Sequences:" << std::endl;
+        for (size_t i = 0; i < sequences.size(); i++) {
+            std::cout << ">Seq" << (i+1) << " " << sequences[i].getId() << std::endl;
+            // Print sequence data in lines of 60 characters (standard FASTA format)
+            const std::string& seqData = sequences[i].getData();
+            for (size_t j = 0; j < seqData.length(); j += 60) {
+                std::cout << seqData.substr(j, 60) << std::endl;
+            }
+        }
+        
+        // Print user information
+        std::cout << "\nAnalysis completed by: Mustafaiqbal2" << std::endl;
+        std::cout << "Date: 2025-03-01 10:01:12 UTC" << std::endl;
     }
+    // Print the sequences in CLUSTAL-like format
+    if (rank == 0) {
+        std::cout << "\nCLUSTAL format alignment by MPI-MSA" << std::endl;
+        std::cout << "\n\n";
+        
+        // Get the maximum sequence ID length for proper spacing
+        size_t maxIdLength = 0;
+        for (size_t i = 0; i < sequences.size(); i++) {
+            std::string seqId = "Seq" + std::to_string(i+1);
+            maxIdLength = std::max(maxIdLength, seqId.length());
+        }
+        
+        // Print each sequence
+        for (size_t i = 0; i < sequences.size(); i++) {
+            std::string seqId = "Seq" + std::to_string(i+1);
+            std::cout << std::left << std::setw(maxIdLength + 8) << seqId;
+            std::cout << sequences[i].getData() << std::endl;
+        }
+        
+        std::cout << "\nNote: This shows original sequences without alignment gaps." << std::endl;
+        std::cout << "To perform full MSA with gap insertion, progressive alignment is required." << std::endl;
+        
+        // Print user information
+        std::cout << "\nAnalysis completed by: " << "Mustafaiqbal2" << std::endl;
+        std::cout << "Date: " << "2025-03-01 10:03:00 UTC" << std::endl;
+}
 }
 
 // ====================== Main Function ======================
