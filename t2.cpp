@@ -14,6 +14,8 @@
 #include <map>
 #include <unordered_map>
 #include <stack>
+#include <set>
+#include <array>
 
 // ====================== Sequence Class ======================
 class Sequence {
@@ -201,13 +203,17 @@ public:
     void buildUPGMA(const DistanceMatrix& distMatrix) {
         size_t n = distMatrix.getSize();
         
-        // Initialize leaf nodes
+        // Use vector of clusters instead of just nodes
+        std::vector<std::set<size_t>> clusters;
         std::vector<Node*> nodes;
+        
+        // Initialize with each sequence as its own cluster
         for (size_t i = 0; i < n; i++) {
             nodes.push_back(new Node(i));
+            clusters.push_back({i});
         }
         
-        // Create working copy of distance matrix
+        // Copy distance matrix for manipulation
         std::vector<std::vector<double>> distances(n, std::vector<double>(n));
         for (size_t i = 0; i < n; i++) {
             for (size_t j = 0; j < n; j++) {
@@ -215,75 +221,62 @@ public:
             }
         }
         
-        // Track cluster sizes for weighted averaging
-        std::vector<size_t> clusterSizes(n, 1);
-        
-        // Main UPGMA loop
-        for (size_t iter = 0; iter < n - 1; iter++) {
-            // Find minimum distance pair
+        // Iteratively merge closest clusters
+        while (clusters.size() > 1) {
+            // Find minimum distance between clusters
             double minDist = std::numeric_limits<double>::max();
             size_t minI = 0, minJ = 0;
             
-            for (size_t i = 0; i < nodes.size(); i++) {
-                for (size_t j = i + 1; j < nodes.size(); j++) {
-                    if (distances[i][j] < minDist) {
-                        minDist = distances[i][j];
+            for (size_t i = 0; i < clusters.size(); i++) {
+                for (size_t j = i + 1; j < clusters.size(); j++) {
+                    double avgDist = 0.0;
+                    int count = 0;
+                    
+                    // Calculate average distance between all members
+                    for (size_t a : clusters[i]) {
+                        for (size_t b : clusters[j]) {
+                            avgDist += distMatrix.get(a, b);
+                            count++;
+                        }
+                    }
+                    
+                    avgDist /= count;
+                    if (avgDist < minDist) {
+                        minDist = avgDist;
                         minI = i;
                         minJ = j;
                     }
                 }
             }
             
-            // Create new internal node
+            // Calculate branch heights
             double height = minDist / 2.0;
+            
+            // Create new node
             Node* newNode = new Node(nodes[minI], nodes[minJ], height);
             
-            // Calculate branch lengths
-            double leftHeight = 0.0;
-            double rightHeight = 0.0;
+            // Merge clusters
+            std::set<size_t> newCluster;
+            newCluster.insert(clusters[minI].begin(), clusters[minI].end());
+            newCluster.insert(clusters[minJ].begin(), clusters[minJ].end());
             
-            if (!nodes[minI]->isLeaf()) leftHeight = nodes[minI]->height;
-            if (!nodes[minJ]->isLeaf()) rightHeight = nodes[minJ]->height;
-            
-            nodes[minI]->height = height - leftHeight;
-            nodes[minJ]->height = height - rightHeight;
-            
-            // Calculate new distances using weighted averaging
-            size_t newIndex = nodes.size();
-            size_t newSize = clusterSizes[minI] + clusterSizes[minJ];
-            
-            distances.push_back(std::vector<double>(newIndex + 1));
-            clusterSizes.push_back(newSize);
-            
-            for (size_t k = 0; k < newIndex; k++) {
-                if (k != minI && k != minJ) {
-                    // Standard UPGMA formula for new distances
-                    double newDist = (distances[minI][k] * clusterSizes[minI] + 
-                                    distances[minJ][k] * clusterSizes[minJ]) / newSize;
-                    
-                    distances[newIndex][k] = newDist;
-                    distances[k][newIndex] = newDist;
-                }
-            }
-            
-            // Remove joined nodes
+            // Remove old clusters and add new one
             if (minJ > minI) {
+                clusters.erase(clusters.begin() + minJ);
+                clusters.erase(clusters.begin() + minI);
                 nodes.erase(nodes.begin() + minJ);
                 nodes.erase(nodes.begin() + minI);
-                clusterSizes.erase(clusterSizes.begin() + minJ);
-                clusterSizes.erase(clusterSizes.begin() + minI);
             } else {
+                clusters.erase(clusters.begin() + minI);
+                clusters.erase(clusters.begin() + minJ);
                 nodes.erase(nodes.begin() + minI);
                 nodes.erase(nodes.begin() + minJ);
-                clusterSizes.erase(clusterSizes.begin() + minI);
-                clusterSizes.erase(clusterSizes.begin() + minJ);
             }
             
-            // Add new node
+            clusters.push_back(newCluster);
             nodes.push_back(newNode);
         }
         
-        // The last node is the root
         root = nodes[0];
     }
     // Get the root node for traversal
@@ -561,8 +554,213 @@ private:
         return score;
     }
 
+        // Add this function to predict secondary structure propensities
+    static void predictSecondaryStructure(const Profile& profile, std::vector<double>& helixPropensity, 
+                                        std::vector<double>& sheetPropensity, std::vector<double>& loopPropensity) {
+        if (profile.empty()) return;
+        
+        size_t length = profile[0].alignedData.length();
+        helixPropensity.resize(length, 0.0);
+        sheetPropensity.resize(length, 0.0);
+        loopPropensity.resize(length, 0.0);
+        
+        // Amino acid propensities for different secondary structures
+        // Values based on statistical analysis of protein structures
+        // Higher values = higher propensity for that structure
+        std::map<char, std::array<double, 3>> propensities = {
+        {'A', std::array<double, 3>{1.45, 0.97, 0.66}}, {'R', std::array<double, 3>{1.21, 0.84, 0.95}},
+        {'N', std::array<double, 3>{0.65, 0.37, 1.56}}, {'D', std::array<double, 3>{0.98, 0.53, 1.46}},
+        {'C', std::array<double, 3>{0.77, 1.40, 0.98}}, {'Q', std::array<double, 3>{1.27, 0.84, 0.96}},
+        {'E', std::array<double, 3>{1.44, 0.75, 0.84}}, {'G', std::array<double, 3>{0.53, 0.58, 1.72}},
+        {'H', std::array<double, 3>{1.05, 0.87, 1.03}}, {'I', std::array<double, 3>{1.00, 1.60, 0.57}},
+        {'L', std::array<double, 3>{1.34, 1.22, 0.57}}, {'K', std::array<double, 3>{1.23, 0.71, 1.01}},
+        {'M', std::array<double, 3>{1.20, 1.11, 0.80}}, {'F', std::array<double, 3>{1.12, 1.33, 0.59}},
+        {'P', std::array<double, 3>{0.57, 0.55, 1.52}}, {'S', std::array<double, 3>{0.79, 0.96, 1.18}},
+        {'T', std::array<double, 3>{0.82, 1.17, 1.08}}, {'W', std::array<double, 3>{1.14, 1.19, 0.75}},
+        {'Y', std::array<double, 3>{0.61, 1.42, 1.05}}, {'V', std::array<double, 3>{0.91, 1.49, 0.47}}
+    };
+
+        
+        // Calculate structure propensities for each position
+        for (size_t pos = 0; pos < length; pos++) {
+            int nonGapCount = 0;
+            double helixTotal = 0.0, sheetTotal = 0.0, loopTotal = 0.0;
+            
+            for (const auto& seq : profile) {
+                if (pos < seq.alignedData.length()) {
+                    char c = seq.alignedData[pos];
+                    if (c != '-' && propensities.find(c) != propensities.end()) {
+                        helixTotal += propensities[c][0];
+                        sheetTotal += propensities[c][1];
+                        loopTotal += propensities[c][2];
+                        nonGapCount++;
+                    }
+                }
+            }
+            
+            if (nonGapCount > 0) {
+                helixPropensity[pos] = helixTotal / nonGapCount;
+                sheetPropensity[pos] = sheetTotal / nonGapCount;
+                loopPropensity[pos] = loopTotal / nonGapCount;
+            }
+        }
+        
+        // Apply a sliding window to smooth the propensities
+        const int windowSize = 4;
+        std::vector<double> smoothedHelix(length), smoothedSheet(length), smoothedLoop(length);
+        
+        for (size_t pos = 0; pos < length; pos++) {
+            double helixSum = 0.0, sheetSum = 0.0, loopSum = 0.0;
+            int count = 0;
+            
+            for (int offset = -windowSize; offset <= windowSize; offset++) {
+                int checkPos = pos + offset;
+                if (checkPos >= 0 && checkPos < static_cast<int>(length)) {
+                    helixSum += helixPropensity[checkPos];
+                    sheetSum += sheetPropensity[checkPos];
+                    loopSum += loopPropensity[checkPos];
+                    count++;
+                }
+            }
+            
+            if (count > 0) {
+                smoothedHelix[pos] = helixSum / count;
+                smoothedSheet[pos] = sheetSum / count;
+                smoothedLoop[pos] = loopSum / count;
+            }
+        }
+        
+        // Update with smoothed values
+        helixPropensity = smoothedHelix;
+        sheetPropensity = smoothedSheet;
+        loopPropensity = smoothedLoop;
+    }
+
+    // Modify the alignProfiles function to use secondary structure awareness for gap penalties
+    static double getStructureAwareGapPenalty(double baseGapOpen, double baseGapExtend, bool isOpening,
+                                            const std::vector<double>& helixProp,
+                                            const std::vector<double>& sheetProp,
+                                            const std::vector<double>& loopProp,
+                                            size_t position) {
+        if (position >= helixProp.size()) {
+            return isOpening ? baseGapOpen : baseGapExtend;
+        }
+        
+        // Determine which structure has highest propensity
+        double maxProp = std::max({helixProp[position], sheetProp[position], loopProp[position]});
+        
+        if (loopProp[position] >= maxProp * 0.9) {
+            // In loop regions, make gaps more likely
+            return isOpening ? baseGapOpen * 0.7 : baseGapExtend * 0.7;
+        } else if (helixProp[position] >= maxProp * 0.9 || sheetProp[position] >= maxProp * 0.9) {
+            // In structured regions, discourage gaps
+            return isOpening ? baseGapOpen * 1.5 : baseGapExtend * 1.3;
+        }
+        
+        return isOpening ? baseGapOpen : baseGapExtend;
+    }
+
+        // Add BLOSUM62 scoring matrix
+    static std::map<std::pair<char, char>, int> getBLOSUM62() {
+        static std::map<std::pair<char, char>, int> blosum62 = {
+            {{'A','A'}, 4}, {{'A','R'}, -1}, {{'A','N'}, -2}, {{'A','D'}, -2}, {{'A','C'}, 0},
+            {{'A','Q'}, -1}, {{'A','E'}, -1}, {{'A','G'}, 0}, {{'A','H'}, -2}, {{'A','I'}, -1},
+            {{'A','L'}, -1}, {{'A','K'}, -1}, {{'A','M'}, -1}, {{'A','F'}, -2}, {{'A','P'}, -1},
+            {{'A','S'}, 1}, {{'A','T'}, 0}, {{'A','W'}, -3}, {{'A','Y'}, -2}, {{'A','V'}, 0},
+            {{'R','R'}, 5}, {{'R','N'}, 0}, {{'R','D'}, -2}, {{'R','C'}, -3}, {{'R','Q'}, 1},
+            {{'R','E'}, 0}, {{'R','G'}, -2}, {{'R','H'}, 0}, {{'R','I'}, -3}, {{'R','L'}, -2},
+            {{'R','K'}, 2}, {{'R','M'}, -1}, {{'R','F'}, -3}, {{'R','P'}, -2}, {{'R','S'}, -1},
+            {{'R','T'}, -1}, {{'R','W'}, -3}, {{'R','Y'}, -2}, {{'R','V'}, -3}, {{'N','N'}, 6},
+            {{'N','D'}, 1}, {{'N','C'}, -3}, {{'N','Q'}, 0}, {{'N','E'}, 0}, {{'N','G'}, 0},
+            {{'N','H'}, 1}, {{'N','I'}, -3}, {{'N','L'}, -3}, {{'N','K'}, 0}, {{'N','M'}, -2},
+            {{'N','F'}, -3}, {{'N','P'}, -2}, {{'N','S'}, 1}, {{'N','T'}, 0}, {{'N','W'}, -4},
+            {{'N','Y'}, -2}, {{'N','V'}, -3}, {{'D','D'}, 6}, {{'D','C'}, -3}, {{'D','Q'}, 0},
+            {{'D','E'}, 2}, {{'D','G'}, -1}, {{'D','H'}, -1}, {{'D','I'}, -3}, {{'D','L'}, -4},
+            {{'D','K'}, -1}, {{'D','M'}, -3}, {{'D','F'}, -3}, {{'D','P'}, -1}, {{'D','S'}, 0},
+            {{'D','T'}, -1}, {{'D','W'}, -4}, {{'D','Y'}, -3}, {{'D','V'}, -3}, {{'C','C'}, 9},
+            {{'C','Q'}, -3}, {{'C','E'}, -4}, {{'C','G'}, -3}, {{'C','H'}, -3}, {{'C','I'}, -1},
+            {{'C','L'}, -1}, {{'C','K'}, -3}, {{'C','M'}, -1}, {{'C','F'}, -2}, {{'C','P'}, -3},
+            {{'C','S'}, -1}, {{'C','T'}, -1}, {{'C','W'}, -2}, {{'C','Y'}, -2}, {{'C','V'}, -1},
+            {{'Q','Q'}, 5}, {{'Q','E'}, 2}, {{'Q','G'}, -2}, {{'Q','H'}, 0}, {{'Q','I'}, -3},
+            {{'Q','L'}, -2}, {{'Q','K'}, 1}, {{'Q','M'}, 0}, {{'Q','F'}, -3}, {{'Q','P'}, -1},
+            {{'Q','S'}, 0}, {{'Q','T'}, -1}, {{'Q','W'}, -2}, {{'Q','Y'}, -1}, {{'Q','V'}, -2},
+            {{'E','E'}, 5}, {{'E','G'}, -2}, {{'E','H'}, 0}, {{'E','I'}, -3}, {{'E','L'}, -3},
+            {{'E','K'}, 1}, {{'E','M'}, -2}, {{'E','F'}, -3}, {{'E','P'}, -1}, {{'E','S'}, 0},
+            {{'E','T'}, -1}, {{'E','W'}, -3}, {{'E','Y'}, -2}, {{'E','V'}, -2}, {{'G','G'}, 6},
+            {{'G','H'}, -2}, {{'G','I'}, -4}, {{'G','L'}, -4}, {{'G','K'}, -2}, {{'G','M'}, -3},
+            {{'G','F'}, -3}, {{'G','P'}, -2}, {{'G','S'}, 0}, {{'G','T'}, -2}, {{'G','W'}, -2},
+            {{'G','Y'}, -3}, {{'G','V'}, -3}, {{'H','H'}, 8}, {{'H','I'}, -3}, {{'H','L'}, -3},
+            {{'H','K'}, -1}, {{'H','M'}, -2}, {{'H','F'}, -1}, {{'H','P'}, -2}, {{'H','S'}, -1},
+            {{'H','T'}, -2}, {{'H','W'}, -2}, {{'H','Y'}, 2}, {{'H','V'}, -3}, {{'I','I'}, 4},
+            {{'I','L'}, 2}, {{'I','K'}, -3}, {{'I','M'}, 1}, {{'I','F'}, 0}, {{'I','P'}, -3},
+            {{'I','S'}, -2}, {{'I','T'}, -1}, {{'I','W'}, -3}, {{'I','Y'}, -1}, {{'I','V'}, 3},
+            {{'L','L'}, 4}, {{'L','K'}, -2}, {{'L','M'}, 2}, {{'L','F'}, 0}, {{'L','P'}, -3},
+            {{'L','S'}, -2}, {{'L','T'}, -1}, {{'L','W'}, -2}, {{'L','Y'}, -1}, {{'L','V'}, 1},
+            {{'K','K'}, 5}, {{'K','M'}, -1}, {{'K','F'}, -3}, {{'K','P'}, -1}, {{'K','S'}, 0},
+            {{'K','T'}, -1}, {{'K','W'}, -3}, {{'K','Y'}, -2}, {{'K','V'}, -2}, {{'M','M'}, 5},
+            {{'M','F'}, 0}, {{'M','P'}, -2}, {{'M','S'}, -1}, {{'M','T'}, -1}, {{'M','W'}, -1},
+            {{'M','Y'}, -1}, {{'M','V'}, 1}, {{'F','F'}, 6}, {{'F','P'}, -4}, {{'F','S'}, -2},
+            {{'F','T'}, -2}, {{'F','W'}, 1}, {{'F','Y'}, 3}, {{'F','V'}, -1}, {{'P','P'}, 7},
+            {{'P','S'}, -1}, {{'P','T'}, -1}, {{'P','W'}, -4}, {{'P','Y'}, -3}, {{'P','V'}, -2},
+            {{'S','S'}, 4}, {{'S','T'}, 1}, {{'S','W'}, -3}, {{'S','Y'}, -2}, {{'S','V'}, -2},
+            {{'T','T'}, 5}, {{'T','W'}, -2}, {{'T','Y'}, -2}, {{'T','V'}, 0}, {{'W','W'}, 11},
+            {{'W','Y'}, 2}, {{'W','V'}, -3}, {{'Y','Y'}, 7}, {{'Y','V'}, -1}, {{'V','V'}, 4}
+        };
+        
+        // Make sure all pairs of amino acids are covered (symmetric matrix)
+        std::map<std::pair<char, char>, int> completeMatrix;
+        for (const auto& entry : blosum62) {
+            char a = entry.first.first;
+            char b = entry.first.second;
+            int score = entry.second;
+            
+            completeMatrix[{a, b}] = score;
+            if (a != b) {
+                completeMatrix[{b, a}] = score; // Add symmetric entry
+            }
+        }
+        
+        return completeMatrix;
+    }
+
+    // Calculate score between positions using BLOSUM62
+    static double calculateBLOSUM62Score(const std::map<char, double>& col1, const std::map<char, double>& col2) {
+        static const auto blosum62 = getBLOSUM62();
+        
+        if (col1.empty() || col2.empty()) {
+            return 0.0; // All gaps
+        }
+        
+        double score = 0.0;
+        
+        // Calculate the weighted score based on amino acid frequencies
+        for (const auto& p1 : col1) {
+            char aa1 = p1.first;
+            double freq1 = p1.second;
+            
+            for (const auto& p2 : col2) {
+                char aa2 = p2.first;
+                double freq2 = p2.second;
+                
+                // Find the BLOSUM62 score for this pair
+                auto key = std::make_pair(aa1, aa2);
+                auto it = blosum62.find(key);
+                
+                if (it != blosum62.end()) {
+                    // Use BLOSUM62 score
+                    score += freq1 * freq2 * it->second;
+                } else {
+                    // Fallback if not found in BLOSUM62 (like for special characters)
+                    score += freq1 * freq2 * (aa1 == aa2 ? 1.0 : -1.0);
+                }
+            }
+        }
+        
+        return score;
+    }
     
     // Align two profiles
+    // Implement a proper three-matrix dynamic programming algorithm for affine gap penalties
     static Profile alignProfiles(const Profile& profile1, const Profile& profile2) {
         if (profile1.empty()) return profile2;
         if (profile2.empty()) return profile1;
@@ -570,122 +768,127 @@ private:
         size_t len1 = profile1[0].alignedData.length();
         size_t len2 = profile2[0].alignedData.length();
         
-        // Modified scoring system for better alignment
-        double match = 2.0;      // Higher reward for matches
-        double mismatch = -1.0;  // Penalty for mismatches
-        double gapOpen = -4.0;     // Severe penalty for opening gaps
-        double gapExtend = -0.5;   // Milder penalty for extending gaps
-        double termGapPenalty = -1.0; // Reduced penalty for terminal gaps
-        
-
-   
         // Create position-specific scoring matrices with improved weighting
         std::vector<std::map<char, double>> psm1 = createPSM(profile1);
         std::vector<std::map<char, double>> psm2 = createPSM(profile2);
         
-        // Dynamic programming matrices with affine gap penalties
-        std::vector<std::vector<double>> score(len1 + 1, std::vector<double>(len2 + 1, 0.0));
-        std::vector<std::vector<char>> trace(len1 + 1, std::vector<char>(len2 + 1, 0));
+        // Gap penalty parameters
+        double gapOpen = -10.0;    // Penalty for opening a gap
+        double gapExtend = -1.0;   // Penalty for extending a gap
         
-        // Gap tracking for affine gap model
-        std::vector<std::vector<bool>> gapOpened(len1 + 1, std::vector<bool>(len2 + 1, false));
+        // Three matrices for proper affine gap penalties
+        std::vector<std::vector<double>> M(len1 + 1, std::vector<double>(len2 + 1, -std::numeric_limits<double>::infinity())); // Match/mismatch
+        std::vector<std::vector<double>> X(len1 + 1, std::vector<double>(len2 + 1, -std::numeric_limits<double>::infinity())); // Gap in profile1
+        std::vector<std::vector<double>> Y(len1 + 1, std::vector<double>(len2 + 1, -std::numeric_limits<double>::infinity())); // Gap in profile2
         
-        // Initialize the matrices with affine gap penalties
-        score[0][0] = 0.0;
-                 // Initialize matrices with affine gap costs
+        // Traceback matrices
+        std::vector<std::vector<char>> traceM(len1 + 1, std::vector<char>(len2 + 1, 0)); // Traceback for M
+        std::vector<std::vector<char>> traceX(len1 + 1, std::vector<char>(len2 + 1, 0)); // Traceback for X
+        std::vector<std::vector<char>> traceY(len1 + 1, std::vector<char>(len2 + 1, 0)); // Traceback for Y
+        
+        // Initialize matrices
+        M[0][0] = 0;
+        X[0][0] = -std::numeric_limits<double>::infinity();
+        Y[0][0] = -std::numeric_limits<double>::infinity();
+        
+        // Initialize first column
         for (size_t i = 1; i <= len1; i++) {
-            // First gap gets opening penalty, rest get extension penalty
-            double penalty = (i == 1) ? gapOpen : gapExtend;
+            M[i][0] = -std::numeric_limits<double>::infinity();
+            X[i][0] = gapOpen + (i-1) * gapExtend;
+            Y[i][0] = -std::numeric_limits<double>::infinity();
             
-            // Apply terminal gap discount for start/end regions
-            if (i <= 3 || i > len1 - 3) penalty = termGapPenalty;
+            traceX[i][0] = 'X'; // Continue in X
+        }
+        
+        // Initialize first row
+        for (size_t j = 1; j <= len2; j++) {
+            M[0][j] = -std::numeric_limits<double>::infinity();
+            X[0][j] = -std::numeric_limits<double>::infinity();
+            Y[0][j] = gapOpen + (j-1) * gapExtend;
             
-            score[i][0] = score[i-1][0] + penalty;
-            trace[i][0] = 'U';
-            gapOpened[i][0] = true;
+            traceY[0][j] = 'Y'; // Continue in Y
         }
 
-        for (size_t j = 1; j <= len2; j++) {
-        // Similar logic for column gaps
-        double penalty = (j == 1) ? gapOpen : gapExtend;
+            // First calculate the structure propensities:
+                std::vector<double> helixProp1, sheetProp1, loopProp1;
+                std::vector<double> helixProp2, sheetProp2, loopProp2;
+                predictSecondaryStructure(profile1, helixProp1, sheetProp1, loopProp1);
+                predictSecondaryStructure(profile2, helixProp2, sheetProp2, loopProp2);
+
         
-        // Terminal gap discount
-        if (j <= 3 || j > len2 - 3) penalty = termGapPenalty;
-        
-        score[0][j] = score[0][j-1] + penalty;
-        trace[0][j] = 'L';
-        gapOpened[0][j] = true;
-    }
-        
-        // Fill DP matrix with special scoring for the expected alignment pattern
+        // Fill the matrices
         for (size_t i = 1; i <= len1; i++) {
             for (size_t j = 1; j <= len2; j++) {
-                // Enhanced match score based on position-specific profiles
-                double matchScore = calculateEnhancedScore(psm1[i-1], psm2[j-1], match, mismatch);
-                double diagScore = score[i-1][j-1] + matchScore;
+
+
+                // Calculate match score using position-specific scoring
+                double matchScore = calculateBLOSUM62Score(psm1[i-1], psm2[j-1]);
                 
-                // Apply position-specific gap penalties to encourage gaps in expected locations
-                // For example, we want to encourage gaps before 'K' in specific sequences
+                // M matrix - ending with a match/mismatch
+                double mFromM = M[i-1][j-1] + getStructureAwareGapPenalty(gapOpen, gapExtend, false, 
+                                                                    helixProp1, sheetProp1, loopProp1, i-1) + matchScore;
+                double mFromX = X[i-1][j-1] + getStructureAwareGapPenalty(gapOpen, gapExtend, true,
+                                                                    helixProp1, sheetProp1, loopProp1, i-1) + matchScore;   
+                double mFromY = Y[i-1][j-1] + getStructureAwareGapPenalty(gapOpen, gapExtend, true,
+                                                                    helixProp1, sheetProp1, loopProp1, i-1) + matchScore;
                 
-                // Specifically adjust scores to match the expected gap pattern
-                bool isBeforeK = false;
-                for (const auto& seq : profile1) {
-                    if (i < seq.alignedData.length() && i > 0 && 
-                        (seq.alignedData[i] == 'K' || seq.alignedData[i] == 'R')) {
-                        isBeforeK = true;
-                        break;
-                    }
+                if (mFromM >= mFromX && mFromM >= mFromY) {
+                    M[i][j] = mFromM;
+                    traceM[i][j] = 'M';
+                } else if (mFromX >= mFromY) {
+                    M[i][j] = mFromX;
+                    traceM[i][j] = 'X';
+                } else {
+                    M[i][j] = mFromY;
+                    traceM[i][j] = 'Y';
                 }
                 
-                double gapPenalty;
-                // Gap already open - use extension penalty
-                if (gapOpened[i-1][j]) {
-                    gapPenalty = gapExtend;
+                // X matrix - ending with a gap in profile2
+                // Usage in the DP matrix fill:
+
+                // Then adjust the gap penalties in matrix filling:
+                double xFromM = M[i-1][j] + getStructureAwareGapPenalty(gapOpen, gapExtend, true, 
+                                                                    helixProp1, sheetProp1, loopProp1, i-1);
+                double xFromX = X[i-1][j] + getStructureAwareGapPenalty(gapOpen, gapExtend, false, 
+                                                                    helixProp1, sheetProp1, loopProp1, i-1);
+
+                                
+                if (xFromM >= xFromX) {
+                    X[i][j] = xFromM;
+                    traceX[i][j] = 'M';
                 } else {
-                    // New gap - opening penalty with position-specific adjustments
-                    gapPenalty = gapOpen;
-                    
-                    // Encourage gaps before K/R
-                    if (isBeforeK) {
-                        gapPenalty = gapPenalty / 2.0; // Reduce penalty
-                    }
-                    
-                    // Terminal gaps get reduced penalty
-                    if (i <= 3 || i > len1 - 3) {
-                        gapPenalty = termGapPenalty;
-                    }
+                    X[i][j] = xFromX;
+                    traceX[i][j] = 'X';
                 }
                 
-                double upScore = score[i-1][j] + gapPenalty;
-                                // Similar logic for horizontal gaps
-                if (gapOpened[i][j-1]) {
-                    gapPenalty = gapExtend;
-                } else {
-                    gapPenalty = gapOpen;
-                    
-                    // Encourage gaps in specific positions that match the expected output
-                    if (j <= 3 || j > len2 - 3) {
-                        gapPenalty = termGapPenalty;
-                    }
-                }
+                // Y matrix - ending with a gap in profile1
+                double yFromM = M[i][j-1] + getStructureAwareGapPenalty(gapOpen, gapExtend, true, 
+                                                        helixProp2, sheetProp2, loopProp2, j-1);
+                double yFromY = Y[i][j-1] + getStructureAwareGapPenalty(gapOpen, gapExtend, false, 
+                                                        helixProp2, sheetProp2, loopProp2, j-1);
                 
-                double leftScore = score[i][j-1] + gapPenalty;
-                
-                // Determine best move
-                if (diagScore >= upScore && diagScore >= leftScore) {
-                    score[i][j] = diagScore;
-                    trace[i][j] = 'D';
-                    gapOpened[i][j] = false;
-                } else if (upScore >= leftScore) {
-                    score[i][j] = upScore;
-                    trace[i][j] = 'U';
-                    gapOpened[i][j] = true;
+                if (yFromM >= yFromY) {
+                    Y[i][j] = yFromM;
+                    traceY[i][j] = 'M';
                 } else {
-                    score[i][j] = leftScore;
-                    trace[i][j] = 'L';
-                    gapOpened[i][j] = true;
+                    Y[i][j] = yFromY;
+                    traceY[i][j] = 'Y';
                 }
             }
+        }
+        
+        // Find which matrix has the best score at the end
+        double bestScore = M[len1][len2];
+        char currentMatrix = 'M';
+        
+        if (X[len1][len2] > bestScore) {
+            bestScore = X[len1][len2];
+            currentMatrix = 'X';
+        }
+        
+        if (Y[len1][len2] > bestScore) {
+            bestScore = Y[len1][len2];
+            currentMatrix = 'Y';
         }
         
         // Traceback to identify positions where gaps need to be inserted
@@ -696,17 +899,24 @@ private:
         size_t j = len2;
         
         while (i > 0 || j > 0) {
-            if (i > 0 && j > 0 && trace[i][j] == 'D') {
-                // Diagonal move - align columns
-                i--; j--;
-            } else if (i > 0 && (j == 0 || trace[i][j] == 'U')) {
-                // Up move - insert gap in profile2 at column j
+            if (currentMatrix == 'M') {
+                // Match state - align both positions
+                char nextMatrix = traceM[i][j];
+                i--;
+                j--;
+                currentMatrix = nextMatrix;
+            } else if (currentMatrix == 'X') {
+                // X state - gap in profile2
+                char nextMatrix = traceX[i][j];
                 insertGapsIntoProfile2.push_back(j);
                 i--;
-            } else {
-                // Left move - insert gap in profile1 at column i
+                currentMatrix = nextMatrix;
+            } else { // currentMatrix == 'Y'
+                // Y state - gap in profile1
+                char nextMatrix = traceY[i][j];
                 insertGapsIntoProfile1.push_back(i);
                 j--;
+                currentMatrix = nextMatrix;
             }
         }
         
@@ -718,7 +928,6 @@ private:
             std::string aligned = seq.alignedData;
             
             // Insert gaps in reverse order to maintain correct positions
-            // Sort in descending order to avoid shifting positions
             std::sort(insertGapsIntoProfile1.begin(), insertGapsIntoProfile1.end(), std::greater<int>());
             
             for (int pos : insertGapsIntoProfile1) {
@@ -748,6 +957,8 @@ private:
         
         return mergedProfile;
     }
+
+    
         
     // Create position-specific scoring matrix for a profile
     static std::vector<std::map<char, double>> createPSM(const Profile& profile) {
@@ -979,10 +1190,6 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
         // Print aligned sequences in CLUSTAL format
         outFile << "\n";
         printClustalFormat(outFile, alignedProfile);
-        
-        // Print user information with current date
-        outFile << "\nAnalysis completed by: Mustafaiqbal2" << std::endl;
-        outFile << "Date: 2025-03-01 10:39:02 UTC" << std::endl;
     }
 }
 
