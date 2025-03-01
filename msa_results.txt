@@ -1,9 +1,9 @@
 Reading sequences from data.fasta
-Read 4 sequences in 2.0048e-05 seconds
+Read 4 sequences in 2.635e-05 seconds
 Total pairs to compute: 6
 Computing pairwise alignments...
-Process 0 computed 6 pairs in 1.3737e-05 seconds
-Average computation time: 1.3737e-05 seconds
+Process 0 computed 6 pairs in 1.593e-05 seconds
+Average computation time: 1.593e-05 seconds
 Total pairs computed: 6
 
 Final Distance Matrix:
@@ -18,7 +18,7 @@ Constructing guide tree using UPGMA...
 Guide tree (Newick format): ((Seq2,Seq4),(Seq1,Seq3));
 
 Performing progressive alignment...
-Progressive alignment completed in 0.0000 seconds
+Progressive alignment completed in 0.0002 seconds
 
 Input Sequences:
 >Seq1 Seq1
@@ -33,11 +33,11 @@ MKTLLILTCLVALAKPQQL
 CLUSTAL format alignment by MPI-MSA
 
 
-Seq1    MKTVLILTCL--VALAKPKAQQL
-Seq2    MKTLLILTCL--VALAKP--QQL
-Seq3    MKTLLILTCLVAVALARPKAQQL
-Seq4    MKTLLILACL--VALAR-KAQQL
-        ***:***:********:******
+Seq1   MKTLLILTCLVAVALARPKAQQL
+Seq2   MKTVLILTCL--VALAKPKAQQL
+Seq4   MKTLLILTCL--VALAKP--QQL
+Seq3   MKTLLILACL--VALAR-KAQQL
+       ***:***:********:******
 
 Analysis completed by: Mustafaiqbal2
 Date: 2025-03-01 10:39:02 UTC
