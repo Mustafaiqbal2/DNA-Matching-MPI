@@ -11,6 +11,9 @@
 #include <stdexcept>
 #include <limits>
 #include <cstdio>
+#include <map>
+#include <unordered_map>
+#include <stack>
 
 // ====================== Sequence Class ======================
 class Sequence {
@@ -269,6 +272,11 @@ public:
         root = nodes[0];
     }
     
+    // Get the root node for traversal
+    Node* getRoot() const {
+        return root;
+    }
+    
     // Print the guide tree in Newick format
     std::string getNewickFormat() const {
         if (!root) return "()";
@@ -293,6 +301,403 @@ private:
         }
     }
 };
+
+// ====================== Progressive Alignment Class ======================
+class ProgressiveAlignment {
+public:
+    struct AlignedSequence {
+        std::string id;
+        std::string originalData;
+        std::string alignedData;  // With gaps inserted
+        
+        AlignedSequence(const Sequence& seq) : 
+            id(seq.getId()), originalData(seq.getData()), alignedData(seq.getData()) {}
+        
+        AlignedSequence(const std::string& id, const std::string& original, const std::string& aligned) :
+            id(id), originalData(original), alignedData(aligned) {}
+        
+        size_t length() const { return alignedData.length(); }
+    };
+    
+    using Profile = std::vector<AlignedSequence>;
+    
+    // Perform the progressive alignment based on the guide tree
+    static Profile alignProgressive(const std::vector<Sequence>& sequences, const GuideTree& tree) {
+        Node* root = tree.getRoot();
+        if (!root) {
+            return {}; // Empty profile if no tree
+        }
+        
+        // Map to store intermediate alignments at each node
+        std::unordered_map<Node*, Profile> nodeProfiles;
+        
+        // Perform post-order traversal to build alignments from leaves to root
+        traverseAndAlign(root, sequences, nodeProfiles);
+        
+        // Return the profile at the root
+        return nodeProfiles[root];
+    }
+    
+    // Generate conservation symbols for CLUSTAL format
+    static std::string generateConservationLine(const Profile& profile) {
+        if (profile.empty()) return "";
+        
+        size_t length = profile[0].alignedData.length();
+        std::string conservationLine(length, ' ');
+        
+        for (size_t i = 0; i < length; i++) {
+            // Count characters at this position
+            std::map<char, int> counts;
+            int nonGapCount = 0;
+            
+            for (const auto& seq : profile) {
+                if (i < seq.alignedData.length()) {
+                    char c = seq.alignedData[i];
+                    if (c != '-') {
+                        counts[c]++;
+                        nonGapCount++;
+                    }
+                }
+            }
+            
+            if (nonGapCount == 0) continue;
+            
+            // Check if all characters are identical
+            if (counts.size() == 1) {
+                conservationLine[i] = '*';  // Fully conserved
+            } else {
+                // Check for conservation groups
+                bool strongGroups = true;
+                char firstChar = '\0';
+                
+                for (const auto& [c, count] : counts) {
+                    if (firstChar == '\0') {
+                        firstChar = c;
+                    } else {
+                        // Check if in same conservation group
+                        if (!isInSameGroup(firstChar, c)) {
+                            strongGroups = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if (strongGroups) {
+                    conservationLine[i] = ':';  // Strongly similar properties
+                } else if (counts.size() <= 3) {
+                    conservationLine[i] = '.';  // Weakly similar properties
+                }
+            }
+        }
+        
+        return conservationLine;
+    }
+
+private:
+    // Traverse the tree in post-order and perform alignments
+    static void traverseAndAlign(Node* node, const std::vector<Sequence>& sequences, 
+                                std::unordered_map<Node*, Profile>& nodeProfiles) {
+        if (!node) return;
+        
+        if (node->isLeaf()) {
+            // Leaf node - create a profile with a single sequence
+            AlignedSequence alignedSeq(sequences[node->id]);
+            nodeProfiles[node] = {alignedSeq};
+        } else {
+            // Internal node - align the profiles of left and right children
+            traverseAndAlign(node->left, sequences, nodeProfiles);
+            traverseAndAlign(node->right, sequences, nodeProfiles);
+            
+            // Merge the profiles from left and right
+            const Profile& leftProfile = nodeProfiles[node->left];
+            const Profile& rightProfile = nodeProfiles[node->right];
+            
+            nodeProfiles[node] = alignProfiles(leftProfile, rightProfile);
+        }
+    }
+    
+    // Needleman-Wunsch with traceback for aligning two sequences
+    static std::pair<std::string, std::string> needlemanWunschAlign(
+        const std::string& s1, const std::string& s2, 
+        double match = 1.0, double mismatch = -1.0, double gap = -2.0) {
+        
+        size_t n = s1.length();
+        size_t m = s2.length();
+        
+        // Create scoring matrix and traceback matrix
+        std::vector<std::vector<double>> H(n + 1, std::vector<double>(m + 1, 0.0));
+        std::vector<std::vector<char>> trace(n + 1, std::vector<char>(m + 1, 0));
+        
+        // Initialize first row and column with gap penalties
+        for (size_t i = 0; i <= n; i++) {
+            H[i][0] = i * gap;
+            trace[i][0] = 'U'; // Up
+        }
+        
+        for (size_t j = 0; j <= m; j++) {
+            H[0][j] = j * gap;
+            trace[0][j] = 'L'; // Left
+        }
+        
+        // Fill the matrices
+        for (size_t i = 1; i <= n; i++) {
+            for (size_t j = 1; j <= m; j++) {
+                double diagScore = H[i-1][j-1] + (s1[i-1] == s2[j-1] ? match : mismatch);
+                double upScore = H[i-1][j] + gap;
+                double leftScore = H[i][j-1] + gap;
+                
+                // Determine the best move
+                if (diagScore >= upScore && diagScore >= leftScore) {
+                    H[i][j] = diagScore;
+                    trace[i][j] = 'D'; // Diagonal
+                } else if (upScore >= leftScore) {
+                    H[i][j] = upScore;
+                    trace[i][j] = 'U'; // Up
+                } else {
+                    H[i][j] = leftScore;
+                    trace[i][j] = 'L'; // Left
+                }
+            }
+        }
+        
+        // Traceback to generate aligned sequences
+        std::string aligned1;
+        std::string aligned2;
+        
+        size_t i = n;
+        size_t j = m;
+        
+        while (i > 0 || j > 0) {
+            if (i > 0 && j > 0 && trace[i][j] == 'D') {
+                // Diagonal move
+                aligned1 = s1[i-1] + aligned1;
+                aligned2 = s2[j-1] + aligned2;
+                i--; j--;
+            } else if (i > 0 && (j == 0 || trace[i][j] == 'U')) {
+                // Up move (gap in s2)
+                aligned1 = s1[i-1] + aligned1;
+                aligned2 = '-' + aligned2;
+                i--;
+            } else {
+                // Left move (gap in s1)
+                aligned1 = '-' + aligned1;
+                aligned2 = s2[j-1] + aligned2;
+                j--;
+            }
+        }
+        
+        return {aligned1, aligned2};
+    }
+    
+    // Align two profiles
+    static Profile alignProfiles(const Profile& profile1, const Profile& profile2) {
+        if (profile1.empty()) return profile2;
+        if (profile2.empty()) return profile1;
+        
+        size_t len1 = profile1[0].alignedData.length();
+        size_t len2 = profile2[0].alignedData.length();
+        
+        // Create position-specific scoring matrices
+        std::vector<std::map<char, double>> psm1 = createPSM(profile1);
+        std::vector<std::map<char, double>> psm2 = createPSM(profile2);
+        
+        // Dynamic programming matrices
+        std::vector<std::vector<double>> score(len1 + 1, std::vector<double>(len2 + 1, 0.0));
+        std::vector<std::vector<char>> trace(len1 + 1, std::vector<char>(len2 + 1, 0));
+        
+        // Initialize the matrices
+        for (size_t i = 0; i <= len1; i++) {
+            score[i][0] = -2.0 * i;  // Gap penalty
+            trace[i][0] = 'U';        // Up direction
+        }
+        
+        for (size_t j = 0; j <= len2; j++) {
+            score[0][j] = -2.0 * j;  // Gap penalty
+            trace[0][j] = 'L';        // Left direction
+        }
+        
+        // Fill the matrices
+        for (size_t i = 1; i <= len1; i++) {
+            for (size_t j = 1; j <= len2; j++) {
+                // Calculate match score between profile columns
+                double matchScore = calculateColumnScore(psm1[i-1], psm2[j-1]);
+                
+                double diagScore = score[i-1][j-1] + matchScore;
+                double upScore = score[i-1][j] - 2.0;  // Gap penalty
+                double leftScore = score[i][j-1] - 2.0; // Gap penalty
+                
+                // Determine the best move
+                if (diagScore >= upScore && diagScore >= leftScore) {
+                    score[i][j] = diagScore;
+                    trace[i][j] = 'D';
+                } else if (upScore >= leftScore) {
+                    score[i][j] = upScore;
+                    trace[i][j] = 'U';
+                } else {
+                    score[i][j] = leftScore;
+                    trace[i][j] = 'L';
+                }
+            }
+        }
+        
+        // Traceback to identify positions where gaps need to be inserted
+        std::vector<int> insertGapsIntoProfile1;
+        std::vector<int> insertGapsIntoProfile2;
+        
+        size_t i = len1;
+        size_t j = len2;
+        
+        while (i > 0 || j > 0) {
+            if (i > 0 && j > 0 && trace[i][j] == 'D') {
+                // Diagonal move - align columns
+                i--; j--;
+            } else if (i > 0 && (j == 0 || trace[i][j] == 'U')) {
+                // Up move - insert gap in profile2 at column j
+                insertGapsIntoProfile2.push_back(j);
+                i--;
+            } else {
+                // Left move - insert gap in profile1 at column i
+                insertGapsIntoProfile1.push_back(i);
+                j--;
+            }
+        }
+        
+        // Create new merged profile
+        Profile mergedProfile;
+        
+        // Add sequences from profile1 with gaps inserted
+        for (const auto& seq : profile1) {
+            std::string aligned = seq.alignedData;
+            
+            // Insert gaps at the specified positions (in reverse order)
+            for (int pos : insertGapsIntoProfile1) {
+                if (pos <= static_cast<int>(aligned.length())) {
+                    aligned.insert(pos, 1, '-');
+                }
+            }
+            
+            mergedProfile.push_back(AlignedSequence(seq.id, seq.originalData, aligned));
+        }
+        
+        // Add sequences from profile2 with gaps inserted
+        for (const auto& seq : profile2) {
+            std::string aligned = seq.alignedData;
+            
+            // Insert gaps at the specified positions (in reverse order)
+            for (int pos : insertGapsIntoProfile2) {
+                if (pos <= static_cast<int>(aligned.length())) {
+                    aligned.insert(pos, 1, '-');
+                }
+            }
+            
+            mergedProfile.push_back(AlignedSequence(seq.id, seq.originalData, aligned));
+        }
+        
+        return mergedProfile;
+    }
+    
+    // Create position-specific scoring matrix for a profile
+    static std::vector<std::map<char, double>> createPSM(const Profile& profile) {
+        if (profile.empty()) return {};
+        
+        size_t length = profile[0].alignedData.length();
+        std::vector<std::map<char, double>> psm(length);
+        
+        for (size_t pos = 0; pos < length; pos++) {
+            // Count characters at this position
+            std::map<char, int> counts;
+            int nonGapCount = 0;
+            
+            for (const auto& seq : profile) {
+                if (pos < seq.alignedData.length()) {
+                    char c = seq.alignedData[pos];
+                    if (c != '-') {
+                        counts[c]++;
+                        nonGapCount++;
+                    }
+                }
+            }
+            
+            // Convert counts to frequencies
+            if (nonGapCount > 0) {
+                for (const auto& [c, count] : counts) {
+                    psm[pos][c] = static_cast<double>(count) / nonGapCount;
+                }
+            }
+        }
+        
+        return psm;
+    }
+    
+    // Calculate score between two profile columns
+    static double calculateColumnScore(const std::map<char, double>& col1, const std::map<char, double>& col2) {
+        double score = 0.0;
+        
+        // If both columns are all gaps, return 0
+        if (col1.empty() || col2.empty()) {
+            return 0.0;
+        }
+        
+        // Score matrix: 1.0 for match, -1.0 for mismatch
+        for (const auto& [c1, freq1] : col1) {
+            for (const auto& [c2, freq2] : col2) {
+                double pairScore = (c1 == c2) ? 1.0 : -1.0;
+                score += freq1 * freq2 * pairScore;
+            }
+        }
+        
+        return score;
+    }
+    
+    // Check if amino acids are in the same conservation group
+    static bool isInSameGroup(char a, char b) {
+        // Define conservation groups for amino acids
+        static const std::vector<std::string> conservationGroups = {
+            "PAGST", // Small/neutral
+            "ILVM",  // Hydrophobic
+            "FYW",   // Aromatic
+            "DE",    // Acidic
+            "KRH",   // Basic
+            "QN",    // Amide
+            "C"      // Cysteine
+        };
+        
+        // Convert to uppercase for consistency
+        a = std::toupper(a);
+        b = std::toupper(b);
+        
+        for (const auto& group : conservationGroups) {
+            if (group.find(a) != std::string::npos && group.find(b) != std::string::npos) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+};
+
+// Function to print CLUSTAL format alignment
+void printClustalFormat(std::ofstream& outFile, const ProgressiveAlignment::Profile& profile) {
+    outFile << "CLUSTAL format alignment by MPI-MSA\n\n\n";
+    
+    // Calculate maximum ID length for formatting
+    size_t maxIdLength = 0;
+    for (size_t i = 0; i < profile.size(); i++) {
+        std::string seqId = "Seq" + std::to_string(i+1);
+        maxIdLength = std::max(maxIdLength, seqId.length());
+    }
+    
+    // Print each sequence
+    for (size_t i = 0; i < profile.size(); i++) {
+        std::string seqId = "Seq" + std::to_string(i+1);
+        outFile << std::left << std::setw(maxIdLength + 4) << seqId;
+        outFile << profile[i].alignedData << std::endl;
+    }
+    
+    // Print conservation line
+    outFile << std::string(maxIdLength + 4, ' ');
+    outFile << ProgressiveAlignment::generateConservationLine(profile) << std::endl;
+}
 
 // ====================== MPI Functions ======================
 void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int numProcs, 
@@ -339,7 +744,7 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
         }
     }
     
-    MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Barrier(MPI_COMM_WORLD);
     auto endTime = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsedTime = endTime - startTime;
     
@@ -398,6 +803,14 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
         tree.buildUPGMA(distMatrix);
         outFile << "Guide tree (Newick format): " << tree.getNewickFormat() << std::endl;
         
+        // Perform progressive alignment
+        outFile << "\nPerforming progressive alignment..." << std::endl;
+        auto alignStart = std::chrono::high_resolution_clock::now();
+        ProgressiveAlignment::Profile alignedProfile = ProgressiveAlignment::alignProgressive(sequences, tree);
+        auto alignEnd = std::chrono::high_resolution_clock::now();
+        double alignTime = std::chrono::duration<double>(alignEnd - alignStart).count();
+        outFile << "Progressive alignment completed in " << alignTime << " seconds" << std::endl;
+        
         // Print original sequences
         outFile << "\nInput Sequences:" << std::endl;
         for (size_t i = 0; i < sequences.size(); i++) {
@@ -409,30 +822,13 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
             }
         }
         
-        // Print CLUSTAL-like format
-        outFile << "\nCLUSTAL format alignment by MPI-MSA" << std::endl;
-        outFile << "\n\n";
-        
-        // Get the maximum sequence ID length for proper spacing
-        size_t maxIdLength = 0;
-        for (size_t i = 0; i < sequences.size(); i++) {
-            std::string seqId = "Seq" + std::to_string(i+1);
-            maxIdLength = std::max(maxIdLength, seqId.length());
-        }
-        
-        // Print each sequence
-        for (size_t i = 0; i < sequences.size(); i++) {
-            std::string seqId = "Seq" + std::to_string(i+1);
-            outFile << std::left << std::setw(maxIdLength + 8) << seqId;
-            outFile << sequences[i].getData() << std::endl;
-        }
-        
-        outFile << "\nNote: This shows original sequences without alignment gaps." << std::endl;
-        outFile << "To perform full MSA with gap insertion, progressive alignment is required." << std::endl;
+        // Print aligned sequences in CLUSTAL format
+        outFile << "\n";
+        printClustalFormat(outFile, alignedProfile);
         
         // Print user information with current date
         outFile << "\nAnalysis completed by: Mustafaiqbal2" << std::endl;
-        outFile << "Date: 2025-03-01 10:20:51 UTC" << std::endl;
+        outFile << "Date: 2025-03-01 10:39:02 UTC" << std::endl;
     }
 }
 
@@ -543,7 +939,6 @@ int main(int argc, char* argv[]) {
     computeDistanceMatrix(sequences, rank, numProcs, computationTime, outFile);
     
     // Close the output file
-    std::cout.flush();
     if (rank == 0) {
         outFile.close();
     }
