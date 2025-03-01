@@ -136,7 +136,7 @@ public:
     }
 
     void print() const {
-        std::cout << "\nDistance Matrix:" << std::endl;
+        std::cout << "Distance Matrix:" << std::endl;
         // Print header
         std::cout << "      ";
         for (size_t j = 0; j < size; j++) {
@@ -294,7 +294,7 @@ private:
 };
 
 // ====================== MPI Functions ======================
-void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int numProcs) {
+void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int numProcs, double& totalComputationTime) {
     size_t n = sequences.size();
     size_t totalPairs = DistanceMatrix::calculateTotalPairs(n);
     
@@ -312,11 +312,14 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
     size_t endPair = startPair + pairsPerProcess + 
                     (static_cast<size_t>(rank) < remainder ? 1 : 0);
     
+    // Only root process prints information
     if (rank == 0) {
         std::cout << "Total pairs to compute: " << totalPairs << std::endl;
         std::cout << "Computing pairwise alignments..." << std::endl;
     }
     
+    // Synchronize all processes before timing starts
+    MPI_Barrier(MPI_COMM_WORLD);
     auto startTime = std::chrono::high_resolution_clock::now();
     
     // Compute assigned pairwise alignments
@@ -334,11 +337,16 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
         }
     }
     
+    MPI_Barrier(MPI_COMM_WORLD);
     auto endTime = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsedTime = endTime - startTime;
     
-    // Only rank 0 prints timing information
+    // Store computation time for return value
+    totalComputationTime = elapsedTime.count();
+    
+    // Collect timing information from all processes to rank 0
     if (rank == 0) {
+        // Only process 0 prints its own timing - we'll gather all later
         std::cout << "Process " << rank << " computed " << (endPair - startPair) 
                   << " pairs in " << elapsedTime.count() << " seconds" << std::endl;
     }
@@ -369,7 +377,7 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
         tree.buildUPGMA(distMatrix);
         std::cout << "Guide tree (Newick format): " << tree.getNewickFormat() << std::endl;
         
-        // Print all sequences at the end
+        // Print original sequences
         std::cout << "\nInput Sequences:" << std::endl;
         for (size_t i = 0; i < sequences.size(); i++) {
             std::cout << ">Seq" << (i+1) << " " << sequences[i].getId() << std::endl;
@@ -380,12 +388,7 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
             }
         }
         
-        // Print user information
-        std::cout << "\nAnalysis completed by: Mustafaiqbal2" << std::endl;
-        std::cout << "Date: 2025-03-01 10:01:12 UTC" << std::endl;
-    }
-    // Print the sequences in CLUSTAL-like format
-    if (rank == 0) {
+        // Print CLUSTAL-like format
         std::cout << "\nCLUSTAL format alignment by MPI-MSA" << std::endl;
         std::cout << "\n\n";
         
@@ -406,10 +409,10 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
         std::cout << "\nNote: This shows original sequences without alignment gaps." << std::endl;
         std::cout << "To perform full MSA with gap insertion, progressive alignment is required." << std::endl;
         
-        // Print user information
-        std::cout << "\nAnalysis completed by: " << "Mustafaiqbal2" << std::endl;
-        std::cout << "Date: " << "2025-03-01 10:03:00 UTC" << std::endl;
-}
+        // Print user information with current date
+        std::cout << "\nAnalysis completed by: Mustafaiqbal2" << std::endl;
+        std::cout << "Date: 2025-03-01 10:06:42 UTC" << std::endl;
+    }
 }
 
 // ====================== Main Function ======================
@@ -432,6 +435,7 @@ int main(int argc, char* argv[]) {
     
     std::string filename = argv[1];
     std::vector<Sequence> sequences;
+    double readTime = 0.0;
     
     // Only rank 0 reads the file and broadcasts to all processes
     if (rank == 0) {
@@ -440,10 +444,10 @@ int main(int argc, char* argv[]) {
             auto start = std::chrono::high_resolution_clock::now();
             sequences = Sequence::readFasta(filename);
             auto end = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> elapsed = end - start;
+            readTime = std::chrono::duration<double>(end - start).count();
             
             std::cout << "Read " << sequences.size() << " sequences in " 
-                      << elapsed.count() << " seconds" << std::endl;
+                      << readTime << " seconds" << std::endl;
         } catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << std::endl;
             MPI_Abort(MPI_COMM_WORLD, 1);
@@ -496,7 +500,8 @@ int main(int argc, char* argv[]) {
     }
     
     // Compute distance matrix in parallel
-    computeDistanceMatrix(sequences, rank, numProcs);
+    double computationTime = 0.0;
+    computeDistanceMatrix(sequences, rank, numProcs, computationTime);
     
     // Finalize MPI
     MPI_Finalize();
