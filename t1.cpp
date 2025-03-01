@@ -1,53 +1,57 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <immintrin.h> // for AVX intrinsics
+#include <math.h>
+#include <immintrin.h>  // For AVX intrinsics
 
-// Define matrix dimension; must be a multiple of 8.
-#ifndef N
-#define N 256
-#endif
+// Default matrix dimension (must be a multiple of 8)
 
-// Scalar implementation using 2D array indexing.
-void scalar_2Dimplementation(float A[N][N], float B[N][N], float C[N][N]) {
-    // For each element, use the transposed value from A (i.e. A[j][i]) and multiply with B[i][j]
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            C[i][j] = A[j][i] * B[i][j];
+// Macro to index a 2D matrix stored in row-major order in a 1D array.
+#define IDX(i, j, n) ((i) * (n) + (j))
+
+// Scalar implementation using 2D-like indexing.
+void scalar_2Dimplementation(const float *A, const float *B, float *C, int n) {
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            // Note: transposition means we use A[j][i] for the element at (i,j)
+            C[IDX(i, j, n)] = A[IDX(j, i, n)] * B[IDX(i, j, n)];
         }
     }
 }
 
-// Scalar implementation using 1D pointer arithmetic style.
-// (Note: Since our matrices are declared as 2D arrays, we use the same logic.)
-void scalar_1Dimplementation(float A[N][N], float B[N][N], float C[N][N]) {
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            // Treat A as if it were stored in 1D in row-major order.
-            // For the transposed element, A[j][i] is at index j*N + i.
-            C[i][j] = A[j][i] * B[i][j];
+// Scalar implementation using 1D indexing (conceptually similar).
+void scalar_1Dimplementation(const float *A, const float *B, float *C, int n) {
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            C[i*n + j] = A[j*n + i] * B[i*n + j];
         }
     }
 }
 
 // SIMD implementation using AVX intrinsics.
-// We perform the transposition in 8x8 blocks and then do element-wise multiplication.
-void simd_implementation(float A[N][N], float B[N][N], float C[N][N]) {
-    // Process the matrix in 8x8 blocks.
-    for (int i0 = 0; i0 < N; i0 += 8) {
-        for (int j0 = 0; j0 < N; j0 += 8) {
-            // Load an 8x8 block from A.
-            // Since we need the transposed block (A^T), we load rows from A with row index (j0+k)
-            __m256 row0 = _mm256_loadu_ps(&A[j0 + 0][i0]);
-            __m256 row1 = _mm256_loadu_ps(&A[j0 + 1][i0]);
-            __m256 row2 = _mm256_loadu_ps(&A[j0 + 2][i0]);
-            __m256 row3 = _mm256_loadu_ps(&A[j0 + 3][i0]);
-            __m256 row4 = _mm256_loadu_ps(&A[j0 + 4][i0]);
-            __m256 row5 = _mm256_loadu_ps(&A[j0 + 5][i0]);
-            __m256 row6 = _mm256_loadu_ps(&A[j0 + 6][i0]);
-            __m256 row7 = _mm256_loadu_ps(&A[j0 + 7][i0]);
+// This version processes the matrices in 8x8 blocks.
+// It assumes that 'n' is a multiple of 8.
+void simd_implementation(const float *A, const float *B, float *C, int n) {
+    // We will cast our contiguous memory blocks to a 2D array pointer
+    // (relying on C99 variable-length arrays).
+    float (*A2D)[n] = (float (*)[n]) A;
+    float (*B2D)[n] = (float (*)[n]) B;
+    float (*C2D)[n] = (float (*)[n]) C;
 
-            // First step: unpack the rows pairwise.
+    for (int i0 = 0; i0 < n; i0 += 8) {
+        for (int j0 = 0; j0 < n; j0 += 8) {
+            // Load an 8x8 block from A.
+            // We want the transposed block, so we load rows corresponding to columns.
+            __m256 row0 = _mm256_loadu_ps(&A2D[j0 + 0][i0]);
+            __m256 row1 = _mm256_loadu_ps(&A2D[j0 + 1][i0]);
+            __m256 row2 = _mm256_loadu_ps(&A2D[j0 + 2][i0]);
+            __m256 row3 = _mm256_loadu_ps(&A2D[j0 + 3][i0]);
+            __m256 row4 = _mm256_loadu_ps(&A2D[j0 + 4][i0]);
+            __m256 row5 = _mm256_loadu_ps(&A2D[j0 + 5][i0]);
+            __m256 row6 = _mm256_loadu_ps(&A2D[j0 + 6][i0]);
+            __m256 row7 = _mm256_loadu_ps(&A2D[j0 + 7][i0]);
+
+            // Unpack and shuffle to perform an 8x8 matrix transposition.
             __m256 t0 = _mm256_unpacklo_ps(row0, row1);
             __m256 t1 = _mm256_unpackhi_ps(row0, row1);
             __m256 t2 = _mm256_unpacklo_ps(row2, row3);
@@ -57,7 +61,6 @@ void simd_implementation(float A[N][N], float B[N][N], float C[N][N]) {
             __m256 t6 = _mm256_unpacklo_ps(row6, row7);
             __m256 t7 = _mm256_unpackhi_ps(row6, row7);
 
-            // Second step: shuffle to interleave.
             __m256 s0 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(1,0,1,0));
             __m256 s1 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(3,2,3,2));
             __m256 s2 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(1,0,1,0));
@@ -67,7 +70,6 @@ void simd_implementation(float A[N][N], float B[N][N], float C[N][N]) {
             __m256 s6 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(1,0,1,0));
             __m256 s7 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(3,2,3,2));
 
-            // Third step: permute to combine 128-bit lanes.
             __m256 col0 = _mm256_permute2f128_ps(s0, s4, 0x20);
             __m256 col1 = _mm256_permute2f128_ps(s1, s5, 0x20);
             __m256 col2 = _mm256_permute2f128_ps(s2, s6, 0x20);
@@ -77,21 +79,18 @@ void simd_implementation(float A[N][N], float B[N][N], float C[N][N]) {
             __m256 col6 = _mm256_permute2f128_ps(s2, s6, 0x31);
             __m256 col7 = _mm256_permute2f128_ps(s3, s7, 0x31);
 
-            // At this point, col0 to col7 contain the transposed 8×8 block.
-            // They correspond to rows of A^T; that is, col0 holds the elements that should go to row (i0+0)
-            // of the result (remember C[i][j] = A^T[i][j] * B[i][j]).
+            // Now, col0 ... col7 hold the transposed block from A.
+            // Next, load the corresponding 8x8 block from B.
+            __m256 b0 = _mm256_loadu_ps(&B2D[i0 + 0][j0]);
+            __m256 b1 = _mm256_loadu_ps(&B2D[i0 + 1][j0]);
+            __m256 b2 = _mm256_loadu_ps(&B2D[i0 + 2][j0]);
+            __m256 b3 = _mm256_loadu_ps(&B2D[i0 + 3][j0]);
+            __m256 b4 = _mm256_loadu_ps(&B2D[i0 + 4][j0]);
+            __m256 b5 = _mm256_loadu_ps(&B2D[i0 + 5][j0]);
+            __m256 b6 = _mm256_loadu_ps(&B2D[i0 + 6][j0]);
+            __m256 b7 = _mm256_loadu_ps(&B2D[i0 + 7][j0]);
 
-            // Load the corresponding 8x8 block from B.
-            __m256 b0 = _mm256_loadu_ps(&B[i0 + 0][j0]);
-            __m256 b1 = _mm256_loadu_ps(&B[i0 + 1][j0]);
-            __m256 b2 = _mm256_loadu_ps(&B[i0 + 2][j0]);
-            __m256 b3 = _mm256_loadu_ps(&B[i0 + 3][j0]);
-            __m256 b4 = _mm256_loadu_ps(&B[i0 + 4][j0]);
-            __m256 b5 = _mm256_loadu_ps(&B[i0 + 5][j0]);
-            __m256 b6 = _mm256_loadu_ps(&B[i0 + 6][j0]);
-            __m256 b7 = _mm256_loadu_ps(&B[i0 + 7][j0]);
-
-            // Perform element-wise multiplication.
+            // Element-wise multiplication.
             __m256 res0 = _mm256_mul_ps(col0, b0);
             __m256 res1 = _mm256_mul_ps(col1, b1);
             __m256 res2 = _mm256_mul_ps(col2, b2);
@@ -101,114 +100,115 @@ void simd_implementation(float A[N][N], float B[N][N], float C[N][N]) {
             __m256 res6 = _mm256_mul_ps(col6, b6);
             __m256 res7 = _mm256_mul_ps(col7, b7);
 
-            // Store the results into C.
-            _mm256_storeu_ps(&C[i0 + 0][j0], res0);
-            _mm256_storeu_ps(&C[i0 + 1][j0], res1);
-            _mm256_storeu_ps(&C[i0 + 2][j0], res2);
-            _mm256_storeu_ps(&C[i0 + 3][j0], res3);
-            _mm256_storeu_ps(&C[i0 + 4][j0], res4);
-            _mm256_storeu_ps(&C[i0 + 5][j0], res5);
-            _mm256_storeu_ps(&C[i0 + 6][j0], res6);
-            _mm256_storeu_ps(&C[i0 + 7][j0], res7);
+            // Store the resulting block into C.
+            _mm256_storeu_ps(&C2D[i0 + 0][j0], res0);
+            _mm256_storeu_ps(&C2D[i0 + 1][j0], res1);
+            _mm256_storeu_ps(&C2D[i0 + 2][j0], res2);
+            _mm256_storeu_ps(&C2D[i0 + 3][j0], res3);
+            _mm256_storeu_ps(&C2D[i0 + 4][j0], res4);
+            _mm256_storeu_ps(&C2D[i0 + 5][j0], res5);
+            _mm256_storeu_ps(&C2D[i0 + 6][j0], res6);
+            _mm256_storeu_ps(&C2D[i0 + 7][j0], res7);
         }
     }
 }
 
+// Function to compare two matrices and return the maximum absolute difference.
+float verify_results(const float *C_ref, const float *C_test, int n) {
+    float max_diff = 0.0f;
+    for (int i = 0; i < n * n; i++) {
+        float diff = fabsf(C_ref[i] - C_test[i]);
+        if (diff > max_diff)
+            max_diff = diff;
+    }
+    return max_diff;
+}
+
 int main(int argc, char* argv[]) {
-    /* 
-       For simplicity, this code uses a fixed compile-time matrix size N.
-       If a command-line argument is provided, we check that it matches N and is a multiple of 8.
-    */
-    int matrix_size = N;
+    int n = argc == 2 ? atoi(argv[1]) : 1024;
     if (argc > 1) {
-        matrix_size = atoi(argv[1]);
-        if (matrix_size != N || (matrix_size % 8) != 0) {
-            printf("Error: Matrix size must be %d (a multiple of 8).\n", N);
+        n = atoi(argv[1]);
+        if (n <= 0 || (n % 8) != 0) {
+            printf("Error: Matrix size must be a positive multiple of 8.\n");
             return -1;
         }
     }
-    
-    // Allocate matrices as 2D arrays (non-contiguous allocation)
-    float **A = (float**) malloc(matrix_size * sizeof(float*));
-    float **B = (float**) malloc(matrix_size * sizeof(float*));
-    float **C = (float**) malloc(matrix_size * sizeof(float*));
-    for (int i = 0; i < matrix_size; i++) {
-        A[i] = (float*) malloc(matrix_size * sizeof(float));
-        B[i] = (float*) malloc(matrix_size * sizeof(float));
-        C[i] = (float*) malloc(matrix_size * sizeof(float));
+    printf("Matrix size: %d x %d\n", n, n);
+
+    // Allocate contiguous memory for matrices A, B and results from each implementation.
+    size_t bytes = n * n * sizeof(float);
+    float *A       = (float *) malloc(bytes);
+    float *B       = (float *) malloc(bytes);
+    float *C_2D    = (float *) malloc(bytes);
+    float *C_1D    = (float *) malloc(bytes);
+    float *C_simd  = (float *) malloc(bytes);
+    if (!A || !B || !C_2D || !C_1D || !C_simd) {
+        printf("Memory allocation error\n");
+        return -1;
     }
-    
-    // Initialize matrices A and B with random values.
-    srand((unsigned int)time(NULL));
-    for (int i = 0; i < matrix_size; i++) {
-        for (int j = 0; j < matrix_size; j++) {
-            A[i][j] = (float)rand() / RAND_MAX;
-            B[i][j] = (float)rand() / RAND_MAX;
-        }
+
+    // Initialize matrices A and B with random float values.
+    srand((unsigned int) time(NULL));
+    for (int i = 0; i < n * n; i++) {
+        A[i] = (float)rand() / RAND_MAX;
+        B[i] = (float)rand() / RAND_MAX;
     }
-    
+
     clock_t start, end;
-    double cpu_time_used;
-    
+    double time_2D, time_1D, time_simd;
+
     // ---------------------------
     // Scalar 2D Implementation
     // ---------------------------
     start = clock();
-    scalar_2Dimplementation((float (*)[N])A, (float (*)[N])B, (float (*)[N])C);
+    scalar_2Dimplementation(A, B, C_2D, n);
     end = clock();
-    cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
-    printf("Scalar 2D time: %f seconds\n", cpu_time_used);
-    
+    time_2D = ((double)(end - start)) / CLOCKS_PER_SEC;
+    printf("Scalar 2D time: %f seconds\n", time_2D);
+
     // ---------------------------
     // Scalar 1D Implementation
     // ---------------------------
     start = clock();
-    scalar_1Dimplementation((float (*)[N])A, (float (*)[N])B, (float (*)[N])C);
+    scalar_1Dimplementation(A, B, C_1D, n);
     end = clock();
-    cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
-    printf("Scalar 1D time: %f seconds\n", cpu_time_used);
-    
+    time_1D = ((double)(end - start)) / CLOCKS_PER_SEC;
+    printf("Scalar 1D time: %f seconds\n", time_1D);
+
     // ---------------------------
     // SIMD Implementation
     // ---------------------------
-    // For the SIMD version, we need a contiguous block of memory.
-    float *A_contig = (float*) malloc(matrix_size * matrix_size * sizeof(float));
-    float *B_contig = (float*) malloc(matrix_size * matrix_size * sizeof(float));
-    float *C_contig = (float*) malloc(matrix_size * matrix_size * sizeof(float));
-    
-    // Copy data from A and B into contiguous arrays (row-major order).
-    for (int i = 0; i < matrix_size; i++) {
-        for (int j = 0; j < matrix_size; j++) {
-            A_contig[i * matrix_size + j] = A[i][j];
-            B_contig[i * matrix_size + j] = B[i][j];
-        }
-    }
-    
-    // Reinterpret the contiguous memory as 2D arrays.
-    float (*A_simd)[N] = (float (*)[N]) A_contig;
-    float (*B_simd)[N] = (float (*)[N]) B_contig;
-    float (*C_simd)[N] = (float (*)[N]) C_contig;
-    
     start = clock();
-    simd_implementation(A_simd, B_simd, C_simd);
+    simd_implementation(A, B, C_simd, n);
     end = clock();
-    cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
-    printf("SIMD time: %f seconds\n", cpu_time_used);
-    
-    // Optionally, you could verify correctness here by comparing C and C_contig.
-    
-    // Free allocated memory.
-    for (int i = 0; i < matrix_size; i++) {
-        free(A[i]);
-        free(B[i]);
-        free(C[i]);
+    time_simd = ((double)(end - start)) / CLOCKS_PER_SEC;
+    printf("SIMD time: %f seconds\n", time_simd);
+
+    // ---------------------------
+    // Speedup Calculation
+    // ---------------------------
+    // Here, we compute the speedup of the SIMD implementation relative to the scalar implementations.
+    double speedup_2D = time_2D / time_simd;
+    double speedup_1D = time_1D / time_simd;
+    printf("Speedup (Scalar 2D / SIMD): %f\n", speedup_2D);
+    printf("Speedup (Scalar 1D / SIMD): %f\n", speedup_1D);
+
+    // ---------------------------
+    // Verification: Compare SIMD result with scalar 2D result.
+    // ---------------------------
+    float max_diff = verify_results(C_2D, C_simd, n);
+    if (max_diff > 1e-6f) {
+        printf("Verification FAILED! Maximum difference: %e\n", max_diff);
+    } else {
+        printf("Verification PASSED! Maximum difference: %e\n", max_diff);
     }
+
+    // Free allocated memory.
     free(A);
     free(B);
-    free(C);
-    free(A_contig);
-    free(B_contig);
-    free(C_contig);
-    
+    free(C_2D);
+    free(C_1D);
+    free(C_simd);
+
     return 0;
 }
