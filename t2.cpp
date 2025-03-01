@@ -306,8 +306,12 @@ void computeDistanceMatrix(const std::vector<Sequence>& sequences, int rank, int
     size_t remainder = totalPairs % numProcs;
     
     // Calculate start and end pair indices for this process
-    size_t startPair = rank * pairsPerProcess + (rank < remainder ? rank : remainder);
-    size_t endPair = startPair + pairsPerProcess + (rank < remainder ? 1 : 0);
+    // Fix signedness comparison warnings by casting rank to size_t
+    size_t startPair = static_cast<size_t>(rank) * pairsPerProcess + 
+                      (static_cast<size_t>(rank) < remainder ? rank : remainder);
+    
+    size_t endPair = startPair + pairsPerProcess + 
+                    (static_cast<size_t>(rank) < remainder ? 1 : 0);
     
     if (rank == 0) {
         std::cout << "Total pairs to compute: " << totalPairs << std::endl;
